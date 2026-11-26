@@ -1,14 +1,14 @@
 // ============================================================================
-// مسار GitHub Actions: sahty/.github/workflows/android-build.yml
+// 1. ملف GitHub Actions النهائي: .github/workflows/main.yml
 // ============================================================================
 /*
-name: Build Sahty Android App (Kotlin)
+name: Build Sahty Android App
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -28,23 +28,26 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
-
       - name: Build Debug APK
-        run: ./gradlew assembleDebug || echo "Ensure Gradle wrapper and Android modules are initialized"
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          else
+            echo "لم يتم العثور على gradlew في جذر المستودع. تأكد من رفع هيكل مشروع Android كاملاً."
+            exit 1
+          fi
 
-      - name: Upload Sahty APK Artifact
+      - name: Upload Debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Sahty-Debug-APK
+          name: sahty-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: ignore
 */
 
 // ============================================================================
-// كود التطبيق الكامل بلغة Kotlin: app/src/main/java/com/sahty/app/SahtyApp.kt
+// 2. كود التطبيق الكامل بـ Kotlin: app/src/main/java/com/sahty/app/SahtyApp.kt
 // ============================================================================
 package com.sahty.app
 
@@ -72,9 +75,9 @@ import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-// ============================================================================
-// 1. DATABASE ENTITIES & DAO (الأدوية، الماء، الضغط، السكري، الطبيب، الخزنة)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// قاعدة البيانات (الأدوية، الماء، الضغط، السكري، الطبيب، الخزنة الطبية)
+// ----------------------------------------------------------------------------
 
 enum class ReminderType {
     MEDICATION, WATER, BLOOD_PRESSURE, BLOOD_SUGAR, DOCTOR_APPOINTMENT
@@ -163,9 +166,9 @@ abstract class HealthDatabase : RoomDatabase() {
     }
 }
 
-// ============================================================================
-// 2. NOTIFICATION CHANNEL (صوت تنبيه راقٍ مثل رنين الآيفون الهادئ)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// قناة الإشعارات بصوت تنبيه راقٍ (res/raw/refined_chime)
+// ----------------------------------------------------------------------------
 
 object NotificationChannels {
     const val HEALTH_ALERTS = "sahty_refined_alerts_v1"
@@ -196,9 +199,9 @@ object NotificationChannels {
     }
 }
 
-// ============================================================================
-// 3. MEDICATION FOLLOW-UP ("هل شربت دواءك؟ نعم / لا" كل 30 دقيقة)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// تنبيه الدواء ومتابعته كل 30 دقيقة ("هل شربت دواءك؟ نعم / لا")
+// ----------------------------------------------------------------------------
 
 class MedicationInitialWorker(
     appContext: Context,
@@ -223,8 +226,6 @@ class MedicationInitialWorker(
             .build()
 
         manager.notify((reminderId + 10000).toInt(), notification)
-
-        // بعد 30 دقيقة يُرسل سؤال: هل شربت دواءك؟ (نعم / لا)
         MedicationFollowUpWorker.scheduleFollowUp(applicationContext, reminderId, delayMinutes = 30)
         return Result.success()
     }
@@ -245,8 +246,6 @@ class MedicationFollowUpWorker(
         if (reminder.isTakenOrCompleted) return Result.success()
 
         showMedConfirmationNotification(reminderId, reminder.title)
-
-        // استمرار الإرسال كل 30 دقيقة إلى غاية الضغط على "نعم"
         scheduleFollowUp(applicationContext, reminderId, delayMinutes = 30)
         return Result.success()
     }
@@ -356,9 +355,9 @@ class MedActionReceiver : BroadcastReceiver() {
     }
 }
 
-// ============================================================================
-// 4. GENERAL & DOCTOR REMINDERS (شرب الماء، الضغط، السكري، الطبيب قبل يوم ويوم الموعد)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// تنبيهات الماء، الضغط، السكري، ومواعيد الطبيب (قبل يوم + يوم الموعد)
+// ----------------------------------------------------------------------------
 
 class GeneralHealthReminderWorker(
     appContext: Context,
@@ -425,7 +424,7 @@ class GeneralHealthReminderWorker(
             if (oneDayBefore > now) {
                 val dayBeforeData = workDataOf(
                     "title" to "تذكير مبكر: موعد مع $doctorName غداً",
-                    "body" to "يرجى تجهيز التحاليل والوصفات وصور Scanner / IRM قبل موعد الغد.",
+                    "body" to "يرجى تجهيز التحاليل والوصفات وصور Scanner / Échographie / IRM قبل موعد الغد.",
                     "notif_id" to (appointmentMillis / 1000).toInt()
                 )
                 val dayBeforeWork = OneTimeWorkRequestBuilder<GeneralHealthReminderWorker>()
@@ -451,9 +450,9 @@ class GeneralHealthReminderWorker(
     }
 }
 
-// ============================================================================
-// 5. PRIVATE ENCRYPTED VAULT (التحاليل، الوصفات، Scanner / Échographie / IRM)
-// ============================================================================
+// ----------------------------------------------------------------------------
+// حفظ وتشفير الصور الطبية الخاصة (تحاليل، وصفات، Scanner / Échographie / IRM)
+// ----------------------------------------------------------------------------
 
 class PrivateMedicalStorage(private val context: Context) {
 
@@ -504,10 +503,6 @@ class PrivateMedicalStorage(private val context: Context) {
         return encryptedFile.openFileInput().use { it.readBytes() }
     }
 }
-
-// ============================================================================
-// 6. APPLICATION ENTRY POINT
-// ============================================================================
 
 class SahtyApplication : Application() {
     override fun onCreate() {
